@@ -4,17 +4,19 @@ import "fmt"
 import "net/http"
 import "github.com/go-martini/martini"
 import "github.com/martini-contrib/cors"
+//import "github.com/martini-contrib/sessions"
 import "github.com/codegangsta/martini-contrib/binding"
 import "labix.org/v2/mgo"
 import "labix.org/v2/mgo/bson"
+//import "encoding/json"
 
 
 type User struct {
     ID bson.ObjectId `bson:"_id,omitempty"`
-    username string `bson:"username"`
-    fullname string `bson:"password"`
-    email string
-    password string
+    Username string
+    Password string
+    Fullname string
+    Email string
 }
 type Login struct {
     Username    string `form:"username" binding:"required"`
@@ -40,18 +42,30 @@ func main() {
     m.Get("/", func() string {
         return "Hello from heroku"
     })
-    m.Post("/login", binding.Form(Login{}), func(login Login, res http.ResponseWriter) string {
-        result := User{}
-        fmt.Println("Before db request " + login.Username)
-        err = c.Find(bson.M{}).One(&result)
-        fmt.Println("After db request " + result.ID + "***")
+    m.Put("/user", binding.Form(User{}), func(user User) string {
+        err := c.Insert(user)
         if err != nil {
             panic(err)
         }
-        if result.password != login.Password {
-            res.WriteHeader(404);
+        return ""
+    })
+    m.Post("/login", binding.Form(Login{}), func(login Login, res http.ResponseWriter) User {
+        user := User{}
+        var query = c.Find(bson.M{"username": login.Username})
+        count,_ := query.Count()
+        if count == 0 {
+            fmt.Errorf("Record not found")
+            res.WriteHeader(404)
+        } else {
+            err = query.One(&user)
+            if err != nil {
+                panic(err)
+            }
+            if user.Password != login.Password {
+                res.WriteHeader(404)
+            }
         }
-        return "";
+        return user
     })
     m.Get("permanences", func() string {
         return "[{\"2014\":{\"Juillet\":{\"24\":\"Libre\", \"31\":\"Libre\"}}}]"
