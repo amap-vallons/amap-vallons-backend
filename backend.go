@@ -29,14 +29,21 @@ type Login struct {
 }
 func main() {
 
+    var offline = false
+    var c *mgo.Collection = nil
     /* DB connection */
     DBsession, err := mgo.Dial("mongodb://amap:rochetoirin@ds043168.mongolab.com:43168/amap-vallons")
     if err != nil {
-        panic(err)
+        fmt.Println("offline")
+        offline = true
     }
     defer DBsession.Close()
 
-    c := DBsession.DB("").C("amap.users")
+    if ! offline {
+        c = DBsession.DB("").C("amap.users")
+    } else {
+        c = nil
+    }
 
     /* Web Framework */
     m := martini.Classic()
@@ -60,17 +67,22 @@ func main() {
                     return
                 }
 
-                var query = c.Find(bson.M{"username": v.(string)})
-                count,_ := query.Count()
-                if count == 0 {
-                    fmt.Errorf("Record not found")
+                if ! offline {
+                    var query = c.Find(bson.M{"username": v.(string)})
+                    count,_ := query.Count()
+                    if count == 0 {
+                        fmt.Errorf("Record not found")
+                        r.Error(404)
+                        return
+                    } else {
+                        err = query.One(&user)
+                        if err != nil {
+                            panic(err)
+                        }
+                    }
+                } else {
                     r.Error(404)
                     return
-                } else {
-                    err = query.One(&user)
-                    if err != nil {
-                        panic(err)
-                    }
                 }
             default:
                 r.Error(404)
@@ -78,6 +90,12 @@ func main() {
         }
         r.JSON(200, map[string]interface{}{"user": user})
     })
+
+    m.Options("/login", func(r render.Render) string {
+        fmt.Errorf("Options")
+        return "Salut"
+    })
+
     m.Put("/user", binding.Form(User{}), func(user User) string {
         err := c.Insert(user)
         if err != nil {
@@ -87,6 +105,11 @@ func main() {
     })
 
     m.Delete("/login", binding.Form(Login{}), func(login Login, session sessions.Session, r render.Render) {
+            session.Set("user", "{ \"user\": {}}")
+    })
+
+    /* A new verb GET /logout is created as cross-domain does not work with DELETE */
+    m.Get("/logout", binding.Form(Login{}), func(login Login, session sessions.Session, r render.Render) {
             session.Set("user", "{ \"user\": {}}")
     })
 
