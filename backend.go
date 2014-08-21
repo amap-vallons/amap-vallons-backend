@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 import "time"
+import "net/http"
 import (
     "github.com/go-martini/martini"
     "github.com/martini-contrib/cors"
@@ -27,10 +28,16 @@ type Login struct {
     Password   string `form:"password"`
     unexported  string `form:"-"`
 }
+type File struct {
+    ID bson.ObjectId `bson:"_id,omitempty"`
+    Filename    string
+    Content []byte
+}
 func main() {
 
     var offline = false
-    var c *mgo.Collection = nil
+    var dbUsers *mgo.Collection = nil
+    var dbFiles *mgo.Collection = nil
     /* DB connection */
     DBsession, err := mgo.Dial("mongodb://amap:rochetoirin@ds043168.mongolab.com:43168/amap-vallons")
     if err != nil {
@@ -40,9 +47,11 @@ func main() {
     defer DBsession.Close()
 
     if ! offline {
-        c = DBsession.DB("").C("amap.users")
+        dbUsers = DBsession.DB("").C("amap.users")
+        dbFiles = DBsession.DB("").C("amap.files")
     } else {
-        c = nil
+        dbUsers = nil
+        dbFiles = nil
     }
 
     /* Web Framework */
@@ -68,7 +77,7 @@ func main() {
                 }
 
                 if ! offline {
-                    var query = c.Find(bson.M{"username": v.(string)})
+                    var query = dbUsers.Find(bson.M{"username": v.(string)})
                     count,_ := query.Count()
                     if count == 0 {
                         fmt.Errorf("Record not found")
@@ -97,7 +106,7 @@ func main() {
     })
 
     m.Put("/user", binding.Form(User{}), func(user User) string {
-        err := c.Insert(user)
+        err := dbUsers.Insert(user)
         if err != nil {
             panic(err)
         }
@@ -113,9 +122,63 @@ func main() {
             session.Set("user", "{ \"user\": {}}")
     })
 
+    m.Get("/files/:filename", func(w http.ResponseWriter, params martini.Params, session sessions.Session) []byte {
+        v := session.Get("user")
+        if v == nil {
+            w.WriteHeader(404)
+            return []byte("")
+        }
+
+        file := File{}
+        var query = dbFiles.Find(bson.M{"filename": params["filename"]})
+        count,_ := query.Count()
+        if count == 0 {
+            fmt.Errorf("Record not found")
+            w.WriteHeader(http.StatusNotFound)
+        } else {
+            err = query.One(&file)
+            if err != nil {
+                panic(err)
+            }
+            w.Header().Add("Content-Disposition", "attachment")
+            w.Header().Add("filename", params["filename"])
+            return file.Content
+        }
+        return []byte("")
+    })
+
+    m.Post("/files/:filename", func(w http.ResponseWriter, req *http.Request, params martini.Params, session sessions.Session) {
+        v := session.Get("user")
+        if v == nil {
+            w.WriteHeader(404)
+            fmt.Errorf("Not authenticated")
+            return
+        }
+
+        file := File{}
+        var query = dbFiles.Find(bson.M{"filename": params["filename"]})
+        count,_ := query.Count()
+        if (req.Body != nil) {
+            if count == 0 {
+                file.Filename = params["filename"]
+                req.Body.Read(file.Content)
+                dbFiles.Insert(file)
+            } else {
+                err = query.One(&file)
+                if err != nil {
+                    panic(err)
+                }
+                req.Body.Read(file.Content)
+                dbFiles.Update(bson.M{"filename": params["filename"]}, file)
+            }
+        } else {
+            w.WriteHeader(406)
+        }
+    })
+
     m.Post("/login", binding.Form(Login{}), func(login Login, session sessions.Session, r render.Render) {
         user := User{}
-        var query = c.Find(bson.M{"username": login.Username})
+        var query = dbUsers.Find(bson.M{"username": login.Username})
         count,_ := query.Count()
         if count == 0 {
             fmt.Errorf("Record not found")
