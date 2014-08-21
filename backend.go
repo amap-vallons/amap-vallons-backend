@@ -2,6 +2,7 @@ package main
 
 import "fmt"
 import "time"
+import "strconv"
 import "net/http"
 import (
     "github.com/go-martini/martini"
@@ -31,6 +32,7 @@ type Login struct {
 type File struct {
     ID bson.ObjectId `bson:"_id,omitempty"`
     Filename    string
+    Size        int
     Content []byte
 }
 func main() {
@@ -114,12 +116,12 @@ func main() {
     })
 
     m.Delete("/login", binding.Form(Login{}), func(login Login, session sessions.Session, r render.Render) {
-            session.Set("user", "{ \"user\": {}}")
+            session.Delete("user")
     })
 
     /* A new verb GET /logout is created as cross-domain does not work with DELETE */
     m.Get("/logout", binding.Form(Login{}), func(login Login, session sessions.Session, r render.Render) {
-            session.Set("user", "{ \"user\": {}}")
+            session.Delete("user")
     })
 
     m.Get("/files/:filename", func(w http.ResponseWriter, params martini.Params, session sessions.Session) []byte {
@@ -140,40 +142,72 @@ func main() {
             if err != nil {
                 panic(err)
             }
-            w.Header().Add("Content-Disposition", "attachment")
-            w.Header().Add("filename", params["filename"])
+            w.Header().Add("Content-Disposition", "attachment; filename=" + params["filename"])
+            w.Header().Add("Set-Cookie", "fileDownload=true; path=/")
             return file.Content
         }
         return []byte("")
     })
 
-    m.Post("/files/:filename", func(w http.ResponseWriter, req *http.Request, params martini.Params, session sessions.Session) {
+    m.Post("/files/:filename", func(w http.ResponseWriter, req *http.Request, params martini.Params, session sessions.Session) string {
         v := session.Get("user")
         if v == nil {
             w.WriteHeader(404)
             fmt.Errorf("Not authenticated")
-            return
+            return ""
         }
 
         file := File{}
+        fileContent, _, err := req.FormFile("file")
+        if err != nil {
+            fmt.Fprintln(w, err)
+            w.WriteHeader(400)
+            return ""
+        }
+        size, err := strconv.Atoi(req.Header["Content-Length"][0])
+        if err != nil {
+            fmt.Fprintln(w, err)
+            w.WriteHeader(400)
+            return ""
+        }
+        fmt.Printf("Size : %d", size)
         var query = dbFiles.Find(bson.M{"filename": params["filename"]})
         count,_ := query.Count()
         if (req.Body != nil) {
             if count == 0 {
                 file.Filename = params["filename"]
-                req.Body.Read(file.Content)
+                file.Content = make([]byte, size)
+                file.Size, err = fileContent.Read(file.Content)
+                if err != nil {
+                    fmt.Fprintln(w, err)
+                    w.WriteHeader(400)
+                    return ""
+                }
+                file.Content = file.Content[0:file.Size]
                 dbFiles.Insert(file)
             } else {
                 err = query.One(&file)
                 if err != nil {
-                    panic(err)
+                    fmt.Fprintln(w, err)
+                    w.WriteHeader(400)
+                    return ""
                 }
-                req.Body.Read(file.Content)
+                file.Content = make([]byte, size)
+                file.Size, err = fileContent.Read(file.Content)
+                if err != nil {
+                    fmt.Fprintln(w, err)
+                    w.WriteHeader(400)
+                    return ""
+                }
+                file.Content = file.Content[0:file.Size]
                 dbFiles.Update(bson.M{"filename": params["filename"]}, file)
+                fmt.Printf("Content size : %d\n", len(file.Content))
+                w.WriteHeader(200)
             }
         } else {
             w.WriteHeader(406)
         }
+        return ""
     })
 
     m.Post("/login", binding.Form(Login{}), func(login Login, session sessions.Session, r render.Render) {
