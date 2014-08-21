@@ -149,6 +149,8 @@ func (o *Options) PreflightHeader(origin, rMethod, rHeaders string) (headers map
 	if o.MaxAge > time.Duration(0) {
 		headers[headerMaxAge] = strconv.FormatInt(int64(o.MaxAge/time.Second), 10)
 	}
+	// add allow credentials
+	headers[headerAllowCredentials] = strconv.FormatBool(o.AllowCredentials)
 	return
 }
 
