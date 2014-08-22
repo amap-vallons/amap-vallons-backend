@@ -96,8 +96,29 @@ func main() {
                     return
                 }
             default:
-                r.Error(404)
-                return
+                v := session.Get("user")
+                if v == nil {
+                    r.Error(404)
+                    return
+                }
+
+                if ! offline {
+                    var query = dbUsers.Find(bson.M{"_id": params["id"]})
+                    count,_ := query.Count()
+                    if count == 0 {
+                        fmt.Errorf("Record not found")
+                        r.Error(404)
+                        return
+                    } else {
+                        err = query.One(&user)
+                        if err != nil {
+                            panic(err)
+                        }
+                    }
+                } else {
+                    r.Error(404)
+                    return
+                }
         }
         r.JSON(200, map[string]interface{}{"user": user})
     })
@@ -115,13 +136,17 @@ func main() {
         return ""
     })
 
-    m.Delete("/login", binding.Form(Login{}), func(login Login, session sessions.Session, r render.Render) {
+    m.Delete("/login", binding.Form(Login{}), func(login Login, session sessions.Session, w http.ResponseWriter) string {
             session.Delete("user")
+            w.WriteHeader(200)
+            return ""
     })
 
     /* A new verb GET /logout is created as cross-domain does not work with DELETE */
-    m.Get("/logout", binding.Form(Login{}), func(login Login, session sessions.Session, r render.Render) {
+    m.Get("/logout", binding.Form(Login{}), func(login Login, session sessions.Session, w http.ResponseWriter) string {
             session.Delete("user")
+            w.WriteHeader(200)
+            return ""
     })
 
     m.Get("/files/:filename", func(w http.ResponseWriter, params martini.Params, session sessions.Session) []byte {
