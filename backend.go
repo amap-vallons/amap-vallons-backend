@@ -35,11 +35,22 @@ type File struct {
     Size        int
     Content []byte
 }
+type Date struct {
+    ID bson.ObjectId `bson:"_id,omitempty" json:"id"`
+	Date time.Time `json:"date"`
+	User interface{} `bson:"user,omitempty" json:"user"`
+}
+type DateUpdate struct {
+    Date Date
+}
+type Dates []Date
+
 func main() {
 
     var offline = false
     var dbUsers *mgo.Collection = nil
     var dbFiles *mgo.Collection = nil
+    var dbDates *mgo.Collection = nil
     /* DB connection */
     DBsession, err := mgo.Dial("mongodb://amap:rochetoirin@ds043168.mongolab.com:43168/amap-vallons")
     if err != nil {
@@ -51,9 +62,11 @@ func main() {
     if ! offline {
         dbUsers = DBsession.DB("").C("amap.users")
         dbFiles = DBsession.DB("").C("amap.files")
+        dbDates = DBsession.DB("").C("amap.dates")
     } else {
         dbUsers = nil
         dbFiles = nil
+        dbDates = nil
     }
 
     /* Web Framework */
@@ -135,6 +148,22 @@ func main() {
         }
         return ""
     })
+
+    m.Get("/users", func(r render.Render) {
+        var users []User
+        var query = dbUsers.Find(nil)
+        count,_ := query.Count()
+        if count == 0 {
+            r.JSON(200, map[string]interface{}{ "users" : nil })
+        } else {
+            err = query.All(&users)
+            if err != nil {
+                panic(err)
+            }
+            r.JSON(200, map[string]interface{}{ "users" : users })
+        }
+    })
+
 
     m.Delete("/login", binding.Form(Login{}), func(login Login, session sessions.Session, w http.ResponseWriter) string {
             session.Delete("user")
@@ -256,8 +285,59 @@ func main() {
         }
     })
 
-    m.Get("/permanences", func() string {
-        return "[{\"2014\":{\"Juillet\":{\"24\":\"Libre\", \"31\":\"Libre\"}}}]"
+    m.Get("/dates", func(r render.Render, req *http.Request) {
+        var dates Dates
+        from,err := time.Parse("Mon Jan 2 2006 15:04:05 GMT-0700 (MST)", req.URL.Query().Get("from"))
+        if err != nil {
+            panic(err)
+        }
+        var query = dbDates.Find(bson.M{ "date" : bson.M{ "$gt" : from } })
+        count,_ := query.Count()
+        if count == 0 {
+            r.JSON(200, map[string]interface{}{ "dates" : make(Dates, 0, 0) })
+        } else {
+            limit,_ := strconv.Atoi(req.URL.Query().Get("count"))
+            if err != nil {
+                panic(err)
+            }
+            err = query.Limit(limit).All(&dates)
+            if err != nil {
+                panic(err)
+            }
+            r.JSON(200, map[string]interface{}{ "dates" : dates })
+        }
     })
+
+    m.Put("/dates/:id", binding.Json(DateUpdate{}), func(w http.ResponseWriter, date DateUpdate, params martini.Params, session sessions.Session) {
+        err := dbDates.UpdateId(bson.ObjectIdHex(params["id"]), bson.M{"$set": bson.M{ "user": date.Date.User}})
+        if err != nil {
+            fmt.Printf("%s\n", err.Error())
+            w.WriteHeader(404)
+            return
+        }
+        w.WriteHeader(200)
+    })
+
+    m.Post("/dates", binding.Json(DateUpdate{}), func(date DateUpdate, session sessions.Session, r render.Render) {
+        var update Date
+        err := dbDates.Find(bson.M{ "date": date.Date.Date }).One(&update)
+        if err != nil {
+            err := dbDates.Insert(date.Date)
+            if err != nil {
+                fmt.Errorf(err.Error())
+                r.Error(404)
+                return
+            }
+            r.JSON(200, map[string]interface{}{ "date" : date.Date })
+        } else {
+            err := dbDates.UpdateId(update.ID, bson.M{"$set": bson.M{ "user": date.Date.User}})
+            if err != nil {
+                fmt.Printf(err.Error())
+                r.Error(404)
+                return
+            }
+        }
+    })
+
     m.Run()
 }
